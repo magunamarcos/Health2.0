@@ -34,7 +34,7 @@ def iniciar_base_datos():
                 carb = float(fila['carbohidratos'])
                 grasas = float(fila['grasas'])
                 alimentos_a_guardar.append((nombre, 'Regional', cal, prot, carb, grasas))
-            
+            with open(´argenfoods.csv´, newline=´´, encoding=´utf-8-sig´) as archivo:
             # Usamos INSERT OR IGNORE para que si ya los guardó ayer, no los duplique hoy
             cursor.executemany("""
                 INSERT OR IGNORE INTO Alimentos 
