@@ -1,6 +1,7 @@
 import streamlit as st
 import sqlite3
 import requests
+import csv
 from datetime import date
 
 # ==========================================
@@ -19,6 +20,31 @@ def iniciar_base_datos():
     cursor.execute('''CREATE TABLE IF NOT EXISTS Mi_Perfil (
             id INTEGER PRIMARY KEY AUTOINCREMENT, calorias REAL, prot REAL, carbos REAL, grasas REAL)''')
     conexion.commit()
+
+    # --- NUEVO: ABSORCIÓN DE ARGENFOODS ---
+    try:
+        with open('argenfoods.csv', newline='', encoding='utf-8') as archivo:
+            lector = csv.DictReader(archivo)
+            alimentos_a_guardar = []
+            for fila in lector:
+                # Agregamos la etiqueta para saber que vienen de la UNLu
+                nombre = f"{fila['nombre']} (ARGENFOODS)"
+                cal = float(fila['calorias'])
+                prot = float(fila['proteinas'])
+                carb = float(fila['carbohidratos'])
+                grasas = float(fila['grasas'])
+                alimentos_a_guardar.append((nombre, 'Regional', cal, prot, carb, grasas))
+            
+            # Usamos INSERT OR IGNORE para que si ya los guardó ayer, no los duplique hoy
+            cursor.executemany("""
+                INSERT OR IGNORE INTO Alimentos 
+                (nombre, categoria, calorias_100g, proteinas_100g, carbos_100g, grasas_100g) 
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, alimentos_a_guardar)
+            conexion.commit()
+    except FileNotFoundError:
+        pass # Si el archivo no está, la app sigue funcionando normal
+        
     conexion.close()
 
 def obtener_perfil():
