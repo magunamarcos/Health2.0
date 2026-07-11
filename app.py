@@ -7,39 +7,60 @@ from datetime import date
 # 1. LA CONEXIÓN A LA NUBE (Open Food Facts)
 # ==========================================
 def buscar_en_base_mundial(termino_busqueda):
-    # Le pedimos a la API los primeros 5 resultados que coincidan
-    url = f"https://world.openfoodfacts.org/cgi/search.pl?search_terms={termino_busqueda}&json=1&page_size=5"
+    url = "https://world.openfoodfacts.org/cgi/search.pl"
+    
+    # 1. Solucionamos los espacios en blanco empaquetando los parámetros
+    parametros = {
+        "search_terms": termino_busqueda,
+        "search_simple": "1",
+        "action": "process",
+        "json": "1",
+        "page_size": "10" # Aumentamos a 10 resultados para tener más opciones
+    }
+    
+    # 2. Creamos nuestro "Documento de Identidad" para que no nos bloqueen
+    headers = {
+        "User-Agent": "MiAppDeNutricion/1.0 - EstudianteFCE"
+    }
     
     try:
-        respuesta = requests.get(url)
+        # Hacemos la conexión de forma segura
+        respuesta = requests.get(url, params=parametros, headers=headers)
         datos = respuesta.json()
         resultados = []
         
         for producto in datos.get("products", []):
             nombre = producto.get("product_name", "")
-            # Si el producto no tiene nombre, lo saltamos
+            
+            # Filtramos productos vacíos
             if not nombre:
                 continue
                 
             nutrientes = producto.get("nutriments", {})
-            # Usamos .get(..., 0) para que si falta un dato ponga un cero
-            calorias = nutrientes.get("energy-kcal_100g", 0)
+            
+            # Open Food Facts a veces guarda las calorías con nombres diferentes.
+            # Aquí le decimos: "Busca 'energy-kcal_100g', si no está, busca 'energy_100g'"
+            calorias = nutrientes.get("energy-kcal_100g", nutrientes.get("energy_100g", 0))
             proteinas = nutrientes.get("proteins_100g", 0)
             carbos = nutrientes.get("carbohydrates_100g", 0)
             grasas = nutrientes.get("fat_100g", 0)
             
-            # Filtramos productos que no tengan calorías cargadas
-            if calorias is not None and calorias > 0:
-                resultados.append({
-                    "nombre": nombre,
-                    "calorias": calorias,
-                    "proteinas": proteinas,
-                    "carbos": carbos,
-                    "grasas": grasas
-                })
+            # Si el alimento tiene más de 0 calorías cargadas, lo agregamos a la lista
+            try:
+                if float(calorias) > 0:
+                    resultados.append({
+                        "nombre": nombre,
+                        "calorias": round(float(calorias), 1),
+                        "proteinas": round(float(proteinas) if proteinas else 0, 1),
+                        "carbos": round(float(carbos) if carbos else 0, 1),
+                        "grasas": round(float(grasas) if grasas else 0, 1)
+                    })
+            except:
+                pass # Si hay algún error matemático con un alimento, lo saltamos silenciosamente
+                
         return resultados
-    except:
-        return [] # Si hay error de internet, devolvemos una lista vacía
+    except Exception as e:
+        return [] 
 
 # ==========================================
 # 2. EL MOTOR SQL (Memoria Local)
