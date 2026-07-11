@@ -1,140 +1,175 @@
 import streamlit as st
 import sqlite3
+import requests # ¡La nueva herramienta para conectarnos a internet!
+from datetime import date
 
 # ==========================================
-# 1. EL CEREBRO MATEMÁTICO (Fórmulas)
+# 1. LA CONEXIÓN A LA NUBE (Open Food Facts)
 # ==========================================
-def calcular_plan_nutricional(peso, altura, edad, sexo, actividad, objetivo):
-    if sexo == 'Masculino':
-        tmb = (10 * peso) + (6.25 * altura) - (5 * edad) + 5
-    else:
-        tmb = (10 * peso) + (6.25 * altura) - (5 * edad) - 161
+def buscar_en_base_mundial(termino_busqueda):
+    # Le pedimos a la API los primeros 5 resultados que coincidan
+    url = f"https://world.openfoodfacts.org/cgi/search.pl?search_terms={termino_busqueda}&json=1&page_size=5"
+    
+    try:
+        respuesta = requests.get(url)
+        datos = respuesta.json()
+        resultados = []
         
-    factores = {'Sedentario': 1.2, 'Ligero': 1.375, 'Moderado': 1.55, 'Intenso': 1.725}
-    get = tmb * factores.get(actividad, 1.2)
-
-    if objetivo == 'Perder grasa':
-        calorias = get * 0.80
-    elif objetivo == 'Ganar masa':
-        calorias = get * 1.15
-    else:
-        calorias = get
-
-    prot = (calorias * 0.30) / 4
-    grasa = (calorias * 0.30) / 9
-    carbos = (calorias * 0.40) / 4
-
-    return round(calorias), round(prot), round(grasa), round(carbos)
+        for producto in datos.get("products", []):
+            nombre = producto.get("product_name", "")
+            # Si el producto no tiene nombre, lo saltamos
+            if not nombre:
+                continue
+                
+            nutrientes = producto.get("nutriments", {})
+            # Usamos .get(..., 0) para que si falta un dato ponga un cero
+            calorias = nutrientes.get("energy-kcal_100g", 0)
+            proteinas = nutrientes.get("proteins_100g", 0)
+            carbos = nutrientes.get("carbohydrates_100g", 0)
+            grasas = nutrientes.get("fat_100g", 0)
+            
+            # Filtramos productos que no tengan calorías cargadas
+            if calorias is not None and calorias > 0:
+                resultados.append({
+                    "nombre": nombre,
+                    "calorias": calorias,
+                    "proteinas": proteinas,
+                    "carbos": carbos,
+                    "grasas": grasas
+                })
+        return resultados
+    except:
+        return [] # Si hay error de internet, devolvemos una lista vacía
 
 # ==========================================
-# 2. EL MOTOR DE DATOS (Conexión SQL)
+# 2. EL MOTOR SQL (Memoria Local)
 # ==========================================
 def iniciar_base_datos():
-    # Crea el archivo SQL y el puente de conexión
     conexion = sqlite3.connect('alimentos.db')
     cursor = conexion.cursor()
-    
-    # Crea la tabla si no existe
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS Alimentos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre TEXT NOT NULL,
-            calorias_100g REAL,
-            proteinas_100g REAL,
-            carbos_100g REAL,
-            grasas_100g REAL
-        )
-    ''')
-    
-    # Verificamos si la base de datos está vacía
-    cursor.execute("SELECT COUNT(*) FROM Alimentos")
-    if cursor.fetchone()[0] == 0:
-        # Si está vacía, le inyectamos 4 alimentos de prueba
-        alimentos_basicos = [
-            ('Pechuga de Pollo cruda', 120.0, 31.0, 0.0, 3.6),
-            ('Arroz Blanco crudo', 350.0, 2.7, 80.0, 0.3),
-            ('Avena Tradicional', 380.0, 13.0, 60.0, 7.0),
-            ('Aceite de Oliva', 884.0, 0.0, 0.0, 100.0)
-        ]
-        cursor.executemany("INSERT INTO Alimentos (nombre, calorias_100g, proteinas_100g, carbos_100g, grasas_100g) VALUES (?, ?, ?, ?, ?)", alimentos_basicos)
+    cursor.execute('''CREATE TABLE IF NOT EXISTS Alimentos (
+            id_alimento INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT UNIQUE NOT NULL,
+            calorias_100g REAL, proteinas_100g REAL, carbos_100g REAL, grasas_100g REAL)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS Registro_Diario (
+            id_registro INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, comida TEXT,
+            alimento_nombre TEXT, gramos REAL, calorias_totales REAL, prot_totales REAL, 
+            carb_totales REAL, grasas_totales REAL)''')
+    conexion.commit()
+    conexion.close()
+
+def guardar_alimento_local(nombre, cal, prot, carb, grasas):
+    conexion = sqlite3.connect('alimentos.db')
+    cursor = conexion.cursor()
+    try:
+        cursor.execute("INSERT INTO Alimentos (nombre, calorias_100g, proteinas_100g, carbos_100g, grasas_100g) VALUES (?, ?, ?, ?, ?)", 
+                       (nombre, cal, prot, carb, grasas))
         conexion.commit()
-    
+        exito = True
+    except sqlite3.IntegrityError:
+        exito = False # El alimento ya estaba guardado
     conexion.close()
+    return exito
 
-def obtener_lista_alimentos():
+def registrar_consumo(fecha, comida, nombre_alimento, gramos):
     conexion = sqlite3.connect('alimentos.db')
     cursor = conexion.cursor()
-    cursor.execute("SELECT nombre FROM Alimentos ORDER BY nombre")
-    # Sacamos los nombres de la base de datos y los guardamos en una lista
-    nombres = [fila[0] for fila in cursor.fetchall()]
-    conexion.close()
-    return nombres
-
-def buscar_macros_alimento(nombre):
-    conexion = sqlite3.connect('alimentos.db')
-    cursor = conexion.cursor()
-    cursor.execute("SELECT calorias_100g, proteinas_100g, carbos_100g, grasas_100g FROM Alimentos WHERE nombre = ?", (nombre,))
+    cursor.execute("SELECT calorias_100g, proteinas_100g, carbos_100g, grasas_100g FROM Alimentos WHERE nombre = ?", (nombre_alimento,))
     datos = cursor.fetchone()
+    if datos:
+        cal_tot = (datos[0] / 100) * gramos; prot_tot = (datos[1] / 100) * gramos
+        carb_tot = (datos[2] / 100) * gramos; grasas_tot = (datos[3] / 100) * gramos
+        cursor.execute("INSERT INTO Registro_Diario (fecha, comida, alimento_nombre, gramos, calorias_totales, prot_totales, carb_totales, grasas_totales) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", 
+                       (fecha, comida, nombre_alimento, gramos, cal_tot, prot_tot, carb_tot, grasas_tot))
+        conexion.commit()
     conexion.close()
-    return datos
 
-# ¡Encendemos la base de datos al iniciar la app!
+# Inicializamos
 iniciar_base_datos()
 
 # ==========================================
-# 3. LA CARA (Interfaz Visual)
+# 3. LA INTERFAZ VISUAL (La Cara)
 # ==========================================
-st.set_page_config(page_title="App de Nutrición", page_icon="🥗", layout="centered")
+st.set_page_config(page_title="Mi Diario", page_icon="📝", layout="centered")
+fecha_hoy = str(date.today())
 
-st.title("🥗 Mi App de Nutrición")
-st.markdown("Calcula tus macros y consulta la base de datos.")
+st.title("📝 Tu Diario de Comidas")
+st.markdown(f"**Fecha:** {fecha_hoy}")
 
-# --- SECCIÓN 1: CALCULADORA DE MACROS ---
-st.subheader("1. Tu Plan Diario")
-with st.expander("Haz clic aquí para ingresar tus datos"):
-    c1, c2, c3 = st.columns(3)
-    with c1: peso = st.number_input("Peso (kg):", value=75.0)
-    with c2: altura = st.number_input("Altura (cm):", value=178.0)
-    with c3: edad = st.number_input("Edad:", value=25)
+# --- LA BARRA LATERAL: CONEXIÓN AL MUNDO ---
+with st.sidebar:
+    st.header("🌍 Buscar en la Nube")
+    st.markdown("Busca cualquier producto en la base de datos mundial para guardarlo en tu app.")
     
-    sexo = st.selectbox("Sexo:", ["Masculino", "Femenino"])
-    actividad = st.selectbox("Actividad:", ["Sedentario", "Ligero", "Moderado", "Intenso"])
-    objetivo = st.selectbox("Objetivo:", ["Perder grasa", "Mantener", "Ganar masa"])
-
-    if st.button("Calcular Macros", type="primary"):
-        cals, prot, grasas, carbos = calcular_plan_nutricional(peso, altura, edad, sexo, actividad, objetivo)
-        st.success(f"🔥 Calorías: {cals} kcal | 🥩 Prot: {prot}g | 🥑 Grasas: {grasas}g | 🍚 Carbos: {carbos}g")
-
-st.divider()
-
-# --- SECCIÓN 2: BASE DE DATOS DE ALIMENTOS ---
-st.subheader("2. Buscador de Alimentos")
-st.info("Estos datos provienen de tu propia base de datos SQL.")
-
-# Obtenemos la lista de la base de datos para el menú desplegable
-lista_disponible = obtener_lista_alimentos()
-alimento_elegido = st.selectbox("Selecciona un alimento:", lista_disponible)
-
-# Un cuadro para que el usuario diga cuántos gramos va a comer
-gramos_a_comer = st.number_input("¿Cuántos gramos vas a comer?", min_value=1.0, value=100.0, step=10.0)
-
-# Buscamos los valores originales (por 100g) en la base de datos
-datos = buscar_macros_alimento(alimento_elegido)
-
-if datos:
-    cal_100, prot_100, carb_100, grasas_100 = datos
+    busqueda = st.text_input("Ej: Avena Quaker, Leche Serenisima...")
     
-    # Aplicamos regla de tres simple para calcular la porción exacta
-    porcion_cal = (cal_100 / 100) * gramos_a_comer
-    porcion_prot = (prot_100 / 100) * gramos_a_comer
-    porcion_carb = (carb_100 / 100) * gramos_a_comer
-    porcion_grasas = (grasas_100 / 100) * gramos_a_comer
+    if st.button("Buscar en Internet", type="primary"):
+        if busqueda:
+            with st.spinner("Buscando en todo el mundo..."):
+                resultados = buscar_en_base_mundial(busqueda)
+                
+            if resultados:
+                st.success(f"Encontramos {len(resultados)} resultados:")
+                # Mostramos los resultados que trajo internet
+                for prod in resultados:
+                    # Usamos un expander para mostrar la información nutricional de cada uno
+                    with st.expander(f"🛒 {prod['nombre']}"):
+                        st.caption(f"Por 100g: {prod['calorias']} kcal | {prod['proteinas']}g Prot | {prod['carbos']}g Carb | {prod['grasas']}g Grasas")
+                        # Un botón para guardar este alimento específico en nuestra SQL
+                        if st.button(f"Guardar {prod['nombre']} en mi App", key=prod['nombre']):
+                            if guardar_alimento_local(prod['nombre'], prod['calorias'], prod['proteinas'], prod['carbos'], prod['grasas']):
+                                st.success("¡Guardado! Ya puedes usarlo en tu diario.")
+                            else:
+                                st.warning("Este alimento ya estaba en tu base de datos.")
+            else:
+                st.error("No se encontraron resultados.")
+
+# --- EL DIARIO (Desayuno, Almuerzo, Cena) ---
+# Obtenemos la lista de alimentos que YA están descargados en nuestra SQL
+conexion = sqlite3.connect('alimentos.db')
+cursor = conexion.cursor()
+cursor.execute("SELECT nombre FROM Alimentos ORDER BY nombre")
+lista_alimentos_locales = [fila[0] for fila in cursor.fetchall()]
+conexion.close()
+
+comidas_del_dia = ["Desayuno", "Almuerzo", "Cena", "Snacks"]
+total_cal, total_prot, total_carb, total_grasa = 0.0, 0.0, 0.0, 0.0
+
+for comida in comidas_del_dia:
+    st.subheader(f"🍽️ {comida}")
     
-    # Mostramos los resultados multiplicados
-    st.markdown(f"**Valores nutricionales para {gramos_a_comer}g de {alimento_elegido}:**")
+    # 1. Mostramos lo comido
+    conexion = sqlite3.connect('alimentos.db')
+    cursor = conexion.cursor()
+    cursor.execute("SELECT alimento_nombre, gramos, calorias_totales, prot_totales, carb_totales, grasas_totales FROM Registro_Diario WHERE fecha = ? AND comida = ?", (fecha_hoy, comida))
+    registros = cursor.fetchall()
+    conexion.close()
     
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric(label="Calorías", value=f"{porcion_cal:.1f}")
-    m2.metric(label="Proteínas", value=f"{porcion_prot:.1f} g")
-    m3.metric(label="Carbohidratos", value=f"{porcion_carb:.1f} g")
-    m4.metric(label="Grasas", value=f"{porcion_grasas:.1f} g")
+    if registros:
+        for reg in registros:
+            st.markdown(f"✔️ **{reg[1]}g de {reg[0]}** (*{reg[2]:.0f} kcal*)")
+            total_cal += reg[2]; total_prot += reg[3]; total_carb += reg[4]; total_grasa += reg[5]
+    else:
+        st.caption("Aún no agregaste nada aquí.")
+
+    # 2. Agregar desde nuestra base de datos local
+    if lista_alimentos_locales:
+        with st.expander(f"➕ Agregar al {comida}"):
+            seleccion = st.selectbox("Mis Alimentos Guardados:", lista_alimentos_locales, key=f"sel_{comida}")
+            gramos = st.number_input("Gramos / ml consumidos:", min_value=1.0, value=100.0, step=10.0, key=f"g_{comida}")
+            
+            if st.button(f"Agregar a {comida}", key=f"btn_{comida}"):
+                registrar_consumo(fecha_hoy, comida, seleccion, gramos)
+                st.rerun()
+    else:
+        st.info("👈 Busca alimentos en la nube (menú lateral) para agregarlos a tu lista.")
+
+    st.divider()
+
+# --- RESUMEN FINAL ---
+st.subheader("📊 Resumen del Día")
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Kcal Totales", f"{total_cal:.0f}")
+m2.metric("Proteínas", f"{total_prot:.0f} g")
+m3.metric("Carbohidratos", f"{total_carb:.0f} g")
+m4.metric("Grasas", f"{total_grasa:.0f} g")
